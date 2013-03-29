@@ -1,3 +1,40 @@
+* Copyrights
+
+  #+BEGIN_SRC emacs-lisp
+    ;; Copyright (C) 2013 Baptiste Fouques
+    ;;
+    ;; Author: Baptiste Fouques
+    ;; Created: Mars 2013
+    ;; Version: 1.0
+    ;; Keywords: calendar, org, google
+    ;;
+    ;; Google calendar  for Org  is free  software; you  can redistribute  it and/or
+    ;; modify it under the  terms of the GNU General Public  License as published by
+    ;; the Free Software Foundation; either version 3, or (at your option) any later
+    ;; version.
+    ;;
+    ;; Google calendar for  Org is distributed in  the hope that it  will be useful,
+    ;; but   WITHOUT  ANY   WARRANTY;   without  even   the   implied  warranty   of
+    ;; MERCHANTABILITY or  FITNESS FOR  A PARTICULAR PURPOSE.   See the  GNU General
+    ;; Public License for more details.
+    ;;
+    ;; You should have received a copy of the GNU General Public License
+    ;; along with GNU Emacs; see the file COPYING.  If not, write to
+    ;; the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+    ;; Boston, MA 02111-1307, USA.
+
+    ;; Options
+    ;;   customization is found in the groupe 'google-calendar'
+    ;;   M-x customize-group google-calendar
+  #+END_SRC
+
+* Provides
+
+  This package provides operations :
+  - google-calendar/get-calendar :: retrieve the list of all your calendars
+  - google/calendar/fetch-calendars  :: retrieve  the content  of calendars  you
+       specified in /google-calendar/file-associations/
+
 * Dependencies
 
   This library depends on :
