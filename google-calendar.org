@@ -1,0 +1,440 @@
+* Dependencies
+
+  This library depends on :
+  - timezone
+  - google-contacts
+  - json
+
+    #+BEGIN_SRC emacs-lisp :results none
+      (require 'google-oauth)
+      (require 'json)
+      (require 'timezone)
+    #+END_SRC
+
+
+* Constants and customization
+
+** Customization
+
+   #+BEGIN_SRC emacs-lisp :results none
+     (defgroup google-calendar nil "Org sync with Google Calendar")
+
+     (defcustom google-calendar/expire-time 3600
+       "Time in seconds to keep entries in cache"
+       :group 'google-calendar
+       :type 'integer)
+
+     (defcustom  google-calendar/calendars-files "~/Org/google-calendars.org"
+       "Org formated file created to reflect google calendars properties"
+       :group 'google-calendar
+       :type 'string)
+
+     (defcustom google-calendar/events-order-by "startTime"
+       "Order events by start time or date of update"
+       :group 'google-calendar
+       :type '(choice (const :tag "Start" "startTime")
+                      (const :tag "Updated" "update")))
+
+     (defcustom google-calendar/up-days 30
+       "Number of days to get events before today"
+       :group 'google-calendar
+       :type 'integer)
+
+     (defcustom google-calendar/down-days 365
+       "Number of days to get events after today"
+       :group 'google-calendar
+       :type 'integer)
+
+     (defcustom google-calendar/file-associations nil
+       "list of association '(calendar-id file) to synchronize at once
+
+     for calendar id, look in your calendars-file after a call to get-calendar"
+       :group 'google-calendar
+       :type '(repeat (list :tag "Calendar and file" (string :tag "Calendar Id") (file :tag "Org file"))))
+   #+END_SRC
+
+** Authentification constants
+
+   #+BEGIN_SRC emacs-lisp :results none
+     (defconst google-calendar/resource-url "https://www.googleapis.com/auth/calendar"
+       "URL used to request access to calendar resources.")
+
+     (defconst google-calendar/oauth-client-id "443695031406-ummfm7mbqhu5iehqejq59b7lq99ik1bd.apps.googleusercontent.com"
+       "Client ID for OAuth.")
+
+     (defconst google-calendar/oauth-client-secret "z5RWcm6lC0EyCVy6NHxuk5hR"
+       "Google calendar secret key. Please don't tell anyone.
+     I AM SERIOUS!")
+
+     (defconst google-calendar/key-url (concat "?key=" google-calendar/oauth-client-secret))
+   #+END_SRC
+
+
+* OAuth2 access
+
+** Use google contact /google-oauth/ library
+
+   #+BEGIN_SRC emacs-lisp :results none
+     (defun google-calendar/oauth-token ()
+       "Get OAuth token to access Google contacts."
+       (google-oauth-auth-and-store
+        google-calendar/resource-url
+        google-calendar/oauth-client-id
+        google-calendar/oauth-client-secret))
+   #+END_SRC
+
+*** COMMENT Test
+
+    #+BEGIN_SRC emacs-lisp :results none
+    ;; (google-calendar/oauth-token)
+    #+END_SRC
+
+    #+RESULTS:
+
+* Access to google data
+
+** Retrieve data from url
+
+   #+BEGIN_SRC emacs-lisp :results none
+     (defun google-calendar/url-retrieve (url &optional token)
+       "Retrieve URL using cache if possible."
+       (let ((url-cache-expire-time google-calendar/expire-time))
+         (if (url-cache-expired url)
+             (let ((buf (oauth2-url-retrieve-synchronously (or token
+                                                               (google-calendar/oauth-token))
+                                                           url)))
+               ;; This is `url-store-in-cache' modified so it uses
+               ;; `google-contacts-resource-url' to store the cache file as the
+               ;; current URL, rathen than the URL with the access token.
+               (with-current-buffer buf
+                 (let ((fname (url-cache-create-filename url)))
+                   (if (url-cache-prepare fname)
+                       (let ((coding-system-for-write 'binary))
+                         (write-region (point-min) (point-max) fname nil 5)))))
+               buf)
+           (url-fetch-from-cache url))))
+
+     (defun google-calendar/http-data (buffer)
+       "Return HTTP data from BUFFER."
+       (with-current-buffer buffer
+         (goto-char (point-min))
+         (search-forward "\n\n" nil t)
+         (let ((headers (buffer-substring (point-min) (point))))
+           (unless (string-match-p "^HTTP/1.1 200 OK" headers)
+             (kill-buffer)
+             (error "Unable to fetch data"))
+           (if (string-match-p "^Content-Type:.* charset=UTF-8" headers)
+               (set-buffer-multibyte t)
+             (set-buffer-multibyte nil)))
+         (let ((data (buffer-substring (point) (point-max))))
+           (kill-buffer)
+           data)))
+
+     (defun google-calendar/http-plist (buffer)
+       "Parse the JSON data from buffer to a plist"
+       (let ((json-object-type 'plist))
+         (json-read-from-string (google-calendar/http-data buffer))))
+
+     (defun google-calendar/url-data (url &optional token)
+       "Return HTTP data from URL, using cache if possible"
+       (google-calendar/http-data (google-calendar/url-retrieve url token)))
+
+     (defun google-calendar/url-plist (url &optional token)
+       "Return plist from URL, using cache if possible"
+       (google-calendar/http-plist (google-calendar/url-retrieve url token)))
+
+   #+END_SRC
+
+*** COMMENT Test
+
+    #+BEGIN_SRC emacs-lisp :results none
+      ;; (google-calendar/url-plist (concat "https://www.googleapis.com/calendar/v3/users/me/calendarList" google-calendar/key-url))
+    #+END_SRC
+
+** Get calendars informations
+
+*** Calendars constants
+
+    #+BEGIN_SRC emacs-lisp :results none
+      (defconst google-calendar/calendars-url "https://www.googleapis.com/calendar/v3/users/me/calendarList")
+
+      (defconst google-calendar/calendar-item-format
+        "* %s
+        :PROPERTIES:
+        :ID: %s
+        :END:
+
+      %s
+
+      (%s - %s)
+      ")
+
+      (defconst google-calendar/calendar-item-format-unselected
+        "* COMMENT %s
+        :PROPERTIES:
+        :ID: %s
+        :END:
+
+      %s
+
+      (%s - %s)
+      ")
+    #+END_SRC
+
+*** Get data
+
+   Get  general informations  on available  calendars and  put them  in the  org
+   formated files ~google-calendar/calendars-files~.
+
+   #+BEGIN_SRC emacs-lisp :results none
+     (defun google-calendar/get-calendar ()
+       "Insert in calendars file usefull informations on user calendars"
+       (interactive)
+       (let* ((calendars (google-calendar/url-plist (concat google-calendar/calendars-url google-calendar/key-url)))
+              (calendars-items (plist-get calendars ':items))
+              )
+         (find-file-other-window google-calendar/calendars-files)
+         (erase-buffer)
+         (setq calendars-items (append calendars-items nil))
+         (setq calendars-items (sort calendars-items 'google-calendar/calendar<))
+         (mapcar 'google-calendar/get-calendar-item calendars-items))
+         (save-buffer)
+         (message (concat "Pull calendar list to " google-calendar/calendars-files)))
+
+     (defun google-calendar/get-calendar-item (item)
+       "Put usefull information on one calendar into current buffer"
+       (let ((id (plist-get item ':id))
+             (summary (plist-get item ':summary))
+             (description (plist-get item ':description))
+             (location (plist-get item ':location))
+             (timeZone (plist-get item ':timeZone))
+             (hidden (plist-get item ':hidden))
+             (selected (plist-get item ':selected))
+             (out ""))
+         (unless hidden
+           (if selected
+               (setq out (format google-calendar/calendar-item-format
+                                 summary id description location timeZone))
+             (setq out (format google-calendar/calendar-item-format-unselected
+                               summary id description location timeZone))))
+         (insert out)
+         )
+     )
+
+     (defun google-calendar/calendar< (a b)
+       "Sort two calendars, on primary, role and id"
+       (let ((a-primary (plist-get a ':primary))
+             (b-primary (plist-get b ':primary))
+             (a-role (plist-get a ':accessRole))
+             (b-role (plist-get b ':accessRole))
+             (a-id (plist-get a ':id))
+             (b-id (plist-get b ':id)))
+         (cond
+          ((and a-primary (not b-primary)))
+          ((and b-primary (not a-primary)) nil)
+          ((and (string= a-role "owner") (not (string= b-role "owner"))))
+          ((and (string= b-role "owner") (not (string= a-role "owner"))) nil)
+          ((and (string= a-role "writer") (not (string= b-role "writer"))))
+          ((and (string= b-role "writer") (not (string= a-role "writer"))) nil)
+          ((string< a-id b-id)))))
+   #+END_SRC
+
+*** COMMENT Test
+    #+BEGIN_SRC emacs-lisp
+      ;; (google-calendar/get-calendar)
+    #+END_SRC
+
+** Get events from one calendar
+
+*** Events constants
+
+    #+BEGIN_SRC emacs-lisp :results none
+      (defconst google-calendar/events-url "https://www.googleapis.com/calendar/v3/calendars/%s/events")
+
+      (defconst google-calendar/event-item-format-cancelled
+        "* CANCELLED %s
+        :PROPERTIES:
+        :ID: %s
+        :LOCATION: %s
+        :CREATOR: %s <%s>
+        :END:
+
+        <%s>--<%s>
+
+        [[Google Link][%s]]
+
+        %s
+
+      ")
+      (defconst google-calendar/event-item-format
+        "* %s
+        :PROPERTIES:
+        :ID: %s
+        :LOCATION: %s
+        :CREATOR: %s <%s>
+        :END:
+
+        <%s>--<%s>
+
+        [[Google Link][%s]]
+
+        %s
+
+      ")
+    #+END_SRC
+
+*** Manage dates
+
+    #+BEGIN_SRC emacs-lisp :results none
+
+      (defun google-calendar/decode (date)
+        (let ((date-list (append (timezone-parse-date date) nil)))
+        (format "%s-%s-%s %s"
+                (nth 0 date-list)
+                (nth 1 date-list)
+                (nth 2 date-list)
+                (nth 3 date-list)
+                )))
+
+      (defun google-calendar/relative-time (delta)
+        (let* ((now (current-time))
+               (delta-time (days-to-time delta))
+               (computed-date (time-add now delta-time)))
+          (format-time-string "%Y-%m-%dT00:00:00Z" computed-date)))
+    #+END_SRC
+
+*** Get data
+
+    #+BEGIN_SRC emacs-lisp :results none
+      (defun google-calendar/fetch-one-page (calendar-id token)
+        (if token
+            (let* ((events-url (format google-calendar/events-url calendar-id))
+                   (events (google-calendar/url-plist (concat events-url google-calendar/key-url "&pagetoken="token))))
+              events)
+            (let* ((events-url (format google-calendar/events-url calendar-id))
+                   (full-url
+                    (concat events-url google-calendar/key-url
+                            ; "&orderBy="google-calendar/events-order-by
+                            "&singleEvents=True"
+                            "&timeMin="(google-calendar/relative-time (- google-calendar/up-days))
+                            "&timeMax="(google-calendar/relative-time google-calendar/down-days)))
+                   (events (google-calendar/url-plist full-url)))
+              events)))
+
+      (defun google-calendar/fetch-events (calendar-id)
+        "Fetch all events pages"
+
+        (let* ((events (google-calendar/fetch-one-page calendar-id nil))
+               (next (plist-get events ':nextPageToken))
+               (items (plist-get events ':items)))
+          (setq items (append items nil))
+          (while next
+            (let* ((n_events (google-calendar/fetch-one-page calendar-id next))
+                   (n_next (plist-get n_events ':nextPageToken))
+                   (n_items (plist-get n_events ':items)))
+              (setq n_items (append n_items nil))
+              (setq items (append items n_items))
+              (setq next n_next)))
+          items))
+
+      (defun google-calendar/get-events (calendar-id file)
+        "Insert in file informations on events from calendar"
+        (let* ((events-items (google-calendar/fetch-events calendar-id)))
+          (setq events-items (append events-items nil))
+          ;; (setq events-items (reverse (sort events-items 'google-calendar/event<)))
+
+          (find-file-other-window file)
+          (erase-buffer)
+
+          (mapcar 'google-calendar/get-events-item events-items)
+          )
+        (save-buffer)
+        (message (concat "pull " calendar-id " into org file " file)))
+
+      (defun google-calendar/event< (a b)
+        "Sort two events on start time, end time and id"
+        (let* ((a-start (plist-get a ':start))
+               (a-startTime (plist-get a-start ':dateTime))
+               (a-end (plist-get a ':end))
+               (a-endTime (plist-get a-end ':dateTime))
+               (a-id (plist-get a ':id))
+               (b-start (plist-get b ':start))
+               (b-startTime (plist-get b-start ':dateTime))
+               (b-end (plist-get b ':end))
+               (b-endTime (plist-get b-end ':dateTime))
+               (b-id (plist-get b ':id)))
+          (cond ((string< a-startTime b-startTime))
+                ((string< b-startTime a-startTime) nil)
+                ((string< a-endTime b-endTime))
+                ((string< b-endTime a-endTime) nil)
+                ((string< a-id b-id)))))
+
+      (defun google-calendar/get-events-item (item)
+        "Put usefull informations on one event into current buffer"
+        (let* ((id (plist-get item ':id))
+               (cancelled (string= (plist-get item ':status) "cancelled"))
+               (link (plist-get item ':htmlList))
+               (summary (plist-get item ':summary))
+               (description (plist-get item ':description))
+               (location (plist-get item ':location))
+               (creator (plist-get item ':creator))
+               (creator-name (plist-get creator ':displayName))
+               (creator-email (plist-get creator ':email))
+               (start (plist-get item ':start))
+               (start-date (plist-get start ':date))
+               (start-dateTime (plist-get start ':dateTime))
+               (start-dateTime-decoded (google-calendar/decode start-dateTime))
+               (end (plist-get item ':end))
+               (end-date (plist-get end ':date))
+               (end-dateTime (plist-get end ':dateTime))
+               (end-dateTime-decoded (google-calendar/decode end-dateTime))
+               (attendees (plist-get item ':attendees))
+               (out ""))
+
+          (if summary
+              (if cancelled
+                  (setq out (format google-calendar/event-item-format-cancelled
+                                    summary
+                                    id location creator-name creator-email
+                                    (if start-dateTime start-dateTime-decoded start-date)
+                                    (if end-dateTime end-dateTime-decoded end-date)
+                                    link
+                                    description))
+                (setq out (format google-calendar/event-item-format
+                                  summary
+                                  id location creator-name creator-email
+                                  (if start-dateTime start-dateTime-decoded start-date)
+                                  (if end-dateTime end-dateTime-decoded end-date)
+                                  link
+                                  description))))
+          (insert out)))
+
+    #+END_SRC
+
+**** COMMENT Test
+
+     #+BEGIN_SRC emacs-lisp
+       ;; (google-calendar/get-events "xxxx@xxxx.com" "~/test.org")
+       ;;  (google-calendar/fetch-events "xxxx@xxxxx.com")
+       ;;  (google-calendar/fetch-one-page "xxxx@xxxx.com" nil)
+     #+END_SRC
+
+** Batch pull from google calendars
+
+   Get and pull into files several calendars at once.
+
+   #+BEGIN_SRC emacs-lisp :results none
+     (defun google-calendar/fetch-calendars ()
+       "Fetch calendars into org files as defined into google-calendar/file-associacions"
+       (interactive)
+
+       (mapcar (lambda (x) (google-calendar/get-events (nth 0 x) (nth 1 x)))
+               google-calendar/file-associations))
+   #+END_SRC
+
+
+* Provide
+
+  #+BEGIN_SRC emacs-lisp :results none
+  (provide 'google-calendar)
+  #+END_SRC
