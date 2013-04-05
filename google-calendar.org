@@ -48,7 +48,6 @@
       (require 'timezone)
     #+END_SRC
 
-
 * Constants and customization
 
 ** Customization
@@ -106,7 +105,6 @@
      (defconst google-calendar/key-url (concat "?key=" google-calendar/oauth-client-secret))
    #+END_SRC
 
-
 * OAuth2 access
 
 ** Use google contact /google-oauth/ library
@@ -157,20 +155,20 @@
          (goto-char (point-min))
          (search-forward "\n\n" nil t)
          (let ((headers (buffer-substring (point-min) (point))))
-           (unless (string-match-p "^HTTP/1.1 200 OK" headers)
-             (kill-buffer)
-             (error "Unable to fetch data"))
            (if (string-match-p "^Content-Type:.* charset=UTF-8" headers)
                (set-buffer-multibyte t)
-             (set-buffer-multibyte nil)))
-         (let ((data (buffer-substring (point) (point-max))))
-           (kill-buffer)
-           data)))
+             (set-buffer-multibyte nil))
+           (if (string-match-p "^HTTP/1.1 200 OK" headers)
+               (let ((data (buffer-substring (point) (point-max))))
+                 (kill-buffer)
+                 data)
+             (not (kill-buffer))))))
 
      (defun google-calendar/http-plist (buffer)
        "Parse the JSON data from buffer to a plist"
-       (let ((json-object-type 'plist))
-         (json-read-from-string (google-calendar/http-data buffer))))
+       (let ((json-object-type 'plist)
+             (data (google-calendar/http-data buffer)))
+         (when data (json-read-from-string data))))
 
      (defun google-calendar/url-data (url &optional token)
        "Return HTTP data from URL, using cache if possible"
@@ -343,7 +341,7 @@
 *** Get data
 
     #+BEGIN_SRC emacs-lisp :results none
-      (defun google-calendar/fetch-one-page (calendar-id token)
+      (defun google-calendar/fetch-one-page (calendar-id token &optional last-update)
         (if token
             (let* ((events-url (format google-calendar/events-url calendar-id))
                    (events (google-calendar/url-plist (concat events-url google-calendar/key-url "&pagetoken="token))))
@@ -354,14 +352,15 @@
                             ; "&orderBy="google-calendar/events-order-by
                             "&singleEvents=True"
                             "&timeMin="(google-calendar/relative-time (- google-calendar/up-days))
-                            "&timeMax="(google-calendar/relative-time google-calendar/down-days)))
+                            "&timeMax="(google-calendar/relative-time google-calendar/down-days)
+                            (when last-update (concat "&updatedMin=" last-update))))
                    (events (google-calendar/url-plist full-url)))
               events)))
 
-      (defun google-calendar/fetch-events (calendar-id)
+      (defun google-calendar/fetch-events (calendar-id &optional last-update)
         "Fetch all events pages"
 
-        (let* ((events (google-calendar/fetch-one-page calendar-id nil))
+        (let* ((events (google-calendar/fetch-one-page calendar-id nil last-update))
                (next (plist-get events ':nextPageToken))
                (items (plist-get events ':items)))
           (setq items (append items nil))
@@ -467,6 +466,124 @@
 
        (mapcar (lambda (x) (google-calendar/get-events (nth 0 x) (nth 1 x)))
                google-calendar/file-associations))
+   #+END_SRC
+
+
+* Sync with /org-sync/
+
+** Depends on /org-sync/
+
+   see [[http://orgmode.org/w/?p%3Dorg-sync.git%3Ba%3Dsummary][os git repo]].
+
+   #+BEGIN_SRC emacs-lisp
+     (require 'org-element)
+     (add-to-list 'load-path "/home/fouques/src/org-sync-3f5ab4c")
+     (require 'os)
+   #+END_SRC
+
+** Add our os backend in list
+
+   #+BEGIN_SRC emacs-lisp :results none
+     (add-to-list 'os-backend-alist (cons "google.com/calendar/.+" 'os-google-calendar))
+
+     (defvar os-google-calendar nil
+       "Google calendar backend to org-sync [os]")
+     (setq os-google-calendar
+       '((base-url      . google-calendar/os-base-url)
+         (fetch-buglist . google-calendar/os-fetch-buglist)
+         (send-buglist  . google-calendar/os-send-buglist)))
+   #+END_SRC
+
+** Define base /url/ from passing /url/
+
+   #+BEGIN_SRC emacs-lisp results: none
+     (defun google-calendar/os-base-url (url)
+       "Compute google calendar API base url from os-sync url argument.
+
+     os-sync url argument should be of the form http://www.google.com/calendar/id with
+     id the actual calendar id"
+
+       (when (string-match "google.com/calendar/\\([^/]+\\)" url)
+         (let ((calendar-id (match-string 1 url)))
+                calendar-id)))
+
+     ;; (google-calendar/os-base-url "http://www.google.com/calendar/xxxxxxxx")
+   #+END_SRC
+
+** Fetch events and convert them to /os/ /bugs list/
+
+   #+BEGIN_SRC emacs-lisp results: none
+     (defun google-calendar/os-fetch-buglist (last-update &optional calendar-id)
+       (let ((events (google-calendar/fetch-events
+                      (if calendar-id calendar-id os-base-url) last-update))
+             (since last-update))
+         (unless events (setq events (google-calendar/fetch-events
+                                      (if calendar-id calendar-id os-base-url)))
+                 (setq since nil))
+         (append
+          `(:title ,(if calendar-id calendar-id os-base-url))
+          `(:bugs ,(mapcar 'google-calendar/os-event-to-bug events))
+          (when since `(:since since)))))
+
+     (defun google-calendar/os-event-to-bug (item)
+       "Convert an Google event to an Org-sync 'bug'"
+
+       (let* ((id (plist-get item ':id))
+              (status-string (plist-get item ':status))
+              (status
+               (if (string= status-string "tentative") 'tentative
+                 (if (string= status-string "confirmed") 'confirmed
+                   (if (string= status-string "cancelled") 'cancelled))))
+              (link (plist-get item ':htmlList))
+              (summary (plist-get item ':summary))
+              (description (plist-get item ':description))
+              (location (plist-get item ':location))
+              (creator (plist-get item ':creator))
+              (creator-name (plist-get creator ':displayName))
+              (creator-email (plist-get creator ':email))
+              (organizer (plist-get item ':organizer))
+              (organizer-name (plist-get organizer ':displayName))
+              (organizer-email (plist-get organizer ':email))
+              (start (plist-get item ':start))
+              (start-date (plist-get start ':date))
+              (start-dateTime (plist-get start ':dateTime))
+              (start-dateTime-decoded (google-calendar/decode start-dateTime))
+              (end (plist-get item ':end))
+              (end-date (plist-get end ':date))
+              (end-dateTime (plist-get end ':dateTime))
+              (end-dateTime-decoded (google-calendar/decode end-dateTime))
+              (attendees (plist-get item ':attendees))
+              (locked (plist-get item ':locked))
+              (hangoutLink (plist-get item ':hangoutLink)))
+
+         (append `(:id ,id)
+                 `(:title ,summary)
+                 (when locked `(:tags ("LOCKED")))
+                 `(:status ,status)
+                 `(:desc ,(if description description " "))
+                 `(:time ,(format
+                           "<%s>--<%s>"
+                           (if start-dateTime start-dateTime-decoded start-date)
+                           (if end-dateTime end-dateTime-decoded end-date)))
+                 (when link `(:link ,link))
+                 (when hangoutLink `(:hangoutLink ,hangoutLink))
+                 (when creator `(:creator ,(concat (when creator-name creator-name)
+                                                   (when creator-email
+                                                     (concat " <" creator-email ">")))))
+                 (when organizer `(:organizer ,(concat (when organizer-name
+                                                         organizer-name)
+                                                   (when organizer-email
+                                                     (concat
+                                                      " <" organizer-email ">")))))
+                 (when location `(:location ,location)))))
+
+     ;; (google-calendar/os-fetch-buglist "2013-03-02T00:00:00Z" "bateast@bat.fr.eu.org")
+   #+END_SRC
+
+** Provide
+
+   #+BEGIN_SRC emacs-lisp :results none
+     (provide 'os-google-calendar)
    #+END_SRC
 
 
