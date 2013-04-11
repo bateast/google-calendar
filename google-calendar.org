@@ -38,14 +38,12 @@
 * Dependencies
 
   This library depends on :
-  - timezone
   - google-contacts
   - json
 
     #+BEGIN_SRC emacs-lisp :results none
       (require 'google-oauth)
       (require 'json)
-      (require 'timezone)
     #+END_SRC
 
 * Constants and customization
@@ -129,29 +127,24 @@
 * Manage dates
 
   #+BEGIN_SRC emacs-lisp :results none
-    
+
     (defun google-calendar/decode (date)
-      (let ((date-list (append (timezone-parse-date date) nil)))
-      (format "%s-%s-%s %s"
-              (nth 0 date-list)
-              (nth 1 date-list)
-              (nth 2 date-list)
-              (nth 3 date-list)
-              )))
-    
+      (when (and (stringp date) (not (string= date "")))
+        (format-time-string (org-time-stamp-format t) (date-to-time date))))
+
     (defun google-calendar/relative-time (delta)
       (let* ((now (current-time))
              (delta-time (days-to-time delta))
              (computed-date (time-add now delta-time)))
         (format-time-string "%Y-%m-%dT00:00:00Z" computed-date)))
-    
-    
+
+
     (defun google-calendar/get-start-end (org-date-range)
       (let ((start nil)(end nil))
       (string-match "\\(<[^>]+?>\\)--\\(<[^>]+>\\)" org-date-range)
       (setq start (match-string 1 org-date-range))
       (setq end (match-string 2 org-date-range))
-      
+
       (list (org-parse-time-string start) (org-parse-time-string end))))
   #+END_SRC
 
@@ -169,7 +162,7 @@
                                                          (google-calendar/oauth-token))
                                                      url)))
          buf))
-     
+
      (defun google-calendar/url-retrieve (url &optional token)
        "Retrieve URL using cache if possible."
        (let ((url-cache-expire-time google-calendar/expire-time))
@@ -187,7 +180,7 @@
                          (write-region (point-min) (point-max) fname nil 5)))))
                buf)
            (url-fetch-from-cache url))))
-     
+
      (defun google-calendar/http-data (buffer)
        "Return HTTP data from BUFFER."
        (with-current-buffer buffer
@@ -202,21 +195,21 @@
                  (kill-buffer)
                  data)
              (not (kill-buffer))))))
-     
+
      (defun google-calendar/http-plist (buffer)
        "Parse the JSON data from buffer to a plist"
        (let ((json-object-type 'plist)
              (data (google-calendar/http-data buffer)))
          (when data (json-read-from-string data))))
-     
+
      (defun google-calendar/url-data (url &optional token)
        "Return HTTP data from URL, using cache if possible"
        (google-calendar/http-data (google-calendar/url-retrieve url token)))
-     
+
      (defun google-calendar/url-plist (url &optional token)
        "Return plist from URL, using cache if possible"
        (google-calendar/http-plist (google-calendar/url-retrieve url token)))
-     
+
    #+END_SRC
 
 *** COMMENT Test
@@ -338,7 +331,7 @@
         :CREATOR: %s <%s>
         :END:
 
-        <%s>--<%s>
+        %s--%s
 
         [[Google Link][%s]]
 
@@ -353,7 +346,7 @@
         :CREATOR: %s <%s>
         :END:
 
-        <%s>--<%s>
+        %s--%s
 
         [[Google Link][%s]]
 
@@ -612,11 +605,11 @@
    #+BEGIN_SRC emacs-lisp :results none
      (defun google-calendar/os-send-buglist (buglist)
        "Send BUGLIST to demo.com and return updated buglist"
-     
+
        (let ((calendar-id (os-get-prop :id buglits)))
          (unless calendar-id
            (error "No calendar id defined in this list"))
-     
+
          (dolist (event (os-get-prop :bugs buglist))
            (cond
             ;; new bug (no id)
@@ -625,11 +618,11 @@
             ;; delete bug
             ((os-get-prop :delete event)
              (google-calendar/delete-event (os-get-prop :id event) 'ask))
-     
+
             ;; else, modified bug
             (t
              (google-calendar/update-event event 'ask))))))
-     
+
      (defun google-calendar/push-new-event calendar-id event
        "Add new event in a google calendar"
        (let* ((event-url (concat (format google-calendar/events-url calendar-id)
@@ -641,32 +634,32 @@
               (description (os-get-prop :desc event))
               (location (os-get-prop :location event))
               (summary (os-get-prop :title event))
-     
-              (gcal-event 
+
+              (gcal-event
                (concat `(:summary ,summary)
                        (when location `(:location ,location))
                        (when description `(:description ,description))
-                       (if (and 
+                       (if (and
                             (= (apply '+ start) (apply '+ (nthcdr 3 start)))
                             (= (apply '+ end) (apply '+ (nthcdr 3 end))))
                            ;; Full days event
-                           `(:start (:date ,(format "%s-%s-%s" 
+                           `(:start (:date ,(format "%s-%s-%s"
                                                     (nth 5 start)
                                                     (nth 4 start)
                                                     (nth 3 start)))
-                                    :end (:date ,(format "%s-%s-%s" 
+                                    :end (:date ,(format "%s-%s-%s"
                                                     (nth 5 end)
                                                     (nth 4 end)
                                                     (nth 3 end))))
                             ;; Partial day events
-                         `(:start (:dateTime ,(format "%s-%s-%sT%s:%s:%s" 
+                         `(:start (:dateTime ,(format "%s-%s-%sT%s:%s:%s"
                                                       (nth 5 start)
                                                       (nth 4 start)
                                                       (nth 3 start)
                                                       (nth 2 start)
                                                       (nth 1 start)
                                                       (nth 0 start)))
-                                  :end (:dateTime ,(format "%s-%s-%sT%s:%s:%s" 
+                                  :end (:dateTime ,(format "%s-%s-%sT%s:%s:%s"
                                                       (nth 5 end)
                                                       (nth 4 end)
                                                       (nth 3 end)
@@ -674,12 +667,12 @@
                                                       (nth 1 end)
                                                       (nth 0 end)))))))
               (json-event (json-encode gcal-event))
-              (answer (google-calendar/http-data 
+              (answer (google-calendar/http-data
                        (google-calendar/url-post event-url json-event))))
          answer))
-     
+
      ;(google-calendar/get-start-end "<2013-03-08 19:08:00>--<2013-03-08 22:11:00>")
-     
+
    #+END_SRC
 
 ** Provide
