@@ -486,7 +486,7 @@
    #+END_SRC
 
 
-* Sync with /org-sync/
+* COMMENT Sync with /org-sync/
 
 ** Depends on /org-sync/
 
