@@ -1,6 +1,6 @@
 * Copyrights
 
-  #+BEGIN_SRC emacs-lisp
+  #+BEGIN_SRC emacs-lisp :tangle google-calendar.el 
     ;; Copyright (C) 2013 Baptiste Fouques
     ;;
     ;; Author: Baptiste Fouques
@@ -41,7 +41,7 @@
   - google-contacts
   - json
 
-    #+BEGIN_SRC emacs-lisp :results none
+    #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
       (require 'google-oauth)
       (require 'json)
     #+END_SRC
@@ -50,7 +50,7 @@
 
 ** Customization
 
-   #+BEGIN_SRC emacs-lisp :results none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
      (defgroup google-calendar nil "Org sync with Google Calendar")
 
      (defcustom google-calendar/expire-time 3600
@@ -89,7 +89,7 @@
 
 ** Authentification constants
 
-   #+BEGIN_SRC emacs-lisp :results none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
      (defconst google-calendar/resource-url "https://www.googleapis.com/auth/calendar"
        "URL used to request access to calendar resources.")
 
@@ -107,7 +107,7 @@
 
 ** Use google contact /google-oauth/ library
 
-   #+BEGIN_SRC emacs-lisp :results none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
      (defun google-calendar/oauth-token ()
        "Get OAuth token to access Google contacts."
        (google-oauth-auth-and-store
@@ -118,7 +118,7 @@
 
 *** COMMENT Test
 
-    #+BEGIN_SRC emacs-lisp :results none
+    #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
     ;; (google-calendar/oauth-token)
     #+END_SRC
 
@@ -126,25 +126,34 @@
 
 * Manage dates
 
-  #+BEGIN_SRC emacs-lisp :results none
-
+  #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
+    (defun google-calendar/normalize-tz (date)
+      (string-match "\\([^T]+T[^+-]+[+-]\\)\\([0-9]+\\):\\([0-9]+\\)" date)
+      (let* ((prefix (match-string 1 date))
+             (hours (match-string 2 date))
+             (minutes (match-string 3 date))
+             (minutes-from-hours (+
+                                  (* 60  (string-to-number hours))
+                                  (string-to-number minutes))))
+        (concat prefix (number-to-string minutes-from-hours))))
+    
     (defun google-calendar/decode (date)
       (when (and (stringp date) (not (string= date "")))
-        (format-time-string (org-time-stamp-format t) (date-to-time date))))
-
+        (format-time-string (org-time-stamp-format t) (date-to-time (google-calendar/normalize-tz date)))))
+    
     (defun google-calendar/relative-time (delta)
       (let* ((now (current-time))
              (delta-time (days-to-time delta))
              (computed-date (time-add now delta-time)))
         (format-time-string "%Y-%m-%dT00:00:00Z" computed-date)))
-
-
+    
+    
     (defun google-calendar/get-start-end (org-date-range)
       (let ((start nil)(end nil))
       (string-match "\\(<[^>]+?>\\)--\\(<[^>]+>\\)" org-date-range)
       (setq start (match-string 1 org-date-range))
       (setq end (match-string 2 org-date-range))
-
+    
       (list (org-parse-time-string start) (org-parse-time-string end))))
   #+END_SRC
 
@@ -152,7 +161,7 @@
 
 ** Retrieve data from url
 
-   #+BEGIN_SRC emacs-lisp :results none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
      (defun google-calendar/url-post (url &optional data token)
        "Send HTTP request at URL using POST with DATA.
      Return the server answer buffer"
@@ -214,7 +223,7 @@
 
 *** COMMENT Test
 
-    #+BEGIN_SRC emacs-lisp :results none
+    #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
       ;; (google-calendar/url-plist (concat "https://www.googleapis.com/calendar/v3/users/me/calendarList" google-calendar/key-url))
     #+END_SRC
 
@@ -222,7 +231,7 @@
 
 *** Calendars constants
 
-    #+BEGIN_SRC emacs-lisp :results none
+    #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
       (defconst google-calendar/calendars-url "https://www.googleapis.com/calendar/v3/users/me/calendarList")
       (defconst google-calendar/single-calendar-url "https://www.googleapis.com/calendar/v3/calendars/")
 
@@ -254,7 +263,7 @@
    Get  general informations  on available  calendars and  put them  in the  org
    formated files ~google-calendar/calendars-files~.
 
-   #+BEGIN_SRC emacs-lisp :results none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
      (defun google-calendar/fetch-calendar (calendar-id)
        (google-calendar/url-plist
         (concat google-calendar/single-calendar-url calendar-id google-calendar/key-url)))
@@ -312,7 +321,7 @@
    #+END_SRC
 
 *** COMMENT Test
-    #+BEGIN_SRC emacs-lisp
+    #+BEGIN_SRC emacs-lisp :tangle google-calendar.el 
       ;; (google-calendar/get-calendar)
     #+END_SRC
 
@@ -320,7 +329,7 @@
 
 *** Events constants
 
-    #+BEGIN_SRC emacs-lisp :results none
+    #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
       (defconst google-calendar/events-url "https://www.googleapis.com/calendar/v3/calendars/%s/events")
 
       (defconst google-calendar/event-item-format-cancelled
@@ -357,7 +366,7 @@
 
 *** Get data
 
-    #+BEGIN_SRC emacs-lisp :results none
+    #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
       (defun google-calendar/fetch-one-page (calendar-id token &optional last-update)
         (if token
             (let* ((events-url (format google-calendar/events-url calendar-id))
@@ -466,7 +475,7 @@
 
 **** COMMENT Test
 
-     #+BEGIN_SRC emacs-lisp
+     #+BEGIN_SRC emacs-lisp :tangle google-calendar.el 
        ;; (google-calendar/get-events "xxxx@xxxx.com" "~/test.org")
        ;;  (google-calendar/fetch-events "xxxx@xxxxx.com")
        ;;  (google-calendar/fetch-one-page "xxxx@xxxx.com" nil)
@@ -476,7 +485,7 @@
 
    Get and pull into files several calendars at once.
 
-   #+BEGIN_SRC emacs-lisp :results none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
      (defun google-calendar/fetch-calendars ()
        "Fetch calendars into org files as defined into google-calendar/file-associacions"
        (interactive)
@@ -492,7 +501,7 @@
 
    see [[http://orgmode.org/w/?p%3Dorg-sync.git%3Ba%3Dsummary][os git repo]].
 
-   #+BEGIN_SRC emacs-lisp
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el 
      (require 'org-element)
      (add-to-list 'load-path "/home/fouques/src/org-sync-3f5ab4c")
      (require 'os)
@@ -500,7 +509,7 @@
 
 ** Add our os backend in list
 
-   #+BEGIN_SRC emacs-lisp :results none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
      (add-to-list 'os-backend-alist (cons "google.com/calendar/.+" 'os-google-calendar))
 
      (defvar os-google-calendar nil
@@ -513,7 +522,7 @@
 
 ** Define base /url/ from passing /url/
 
-   #+BEGIN_SRC emacs-lisp results: none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  results: none
      (defun google-calendar/os-base-url (url)
        "Compute google calendar API base url from os-sync url argument.
 
@@ -529,7 +538,7 @@
 
 ** Fetch events and convert them to /os/ /bugs list/
 
-   #+BEGIN_SRC emacs-lisp results: none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  results: none
      (defun google-calendar/os-fetch-buglist (last-update &optional calendar-id)
        (let ((calendar (google-calendar/fetch-calendar
                         (if calendar-id calendar-id os-base-url)))
@@ -602,7 +611,7 @@
 
 ** Send /bug list/ as updating events
 
-   #+BEGIN_SRC emacs-lisp :results none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
      (defun google-calendar/os-send-buglist (buglist)
        "Send BUGLIST to demo.com and return updated buglist"
 
@@ -677,13 +686,13 @@
 
 ** Provide
 
-   #+BEGIN_SRC emacs-lisp :results none
+   #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
      (provide 'os-google-calendar)
    #+END_SRC
 
 
 * Provide
 
-  #+BEGIN_SRC emacs-lisp :results none
+  #+BEGIN_SRC emacs-lisp :tangle google-calendar.el  :results none
   (provide 'google-calendar)
   #+END_SRC
