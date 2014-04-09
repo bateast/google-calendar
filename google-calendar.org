@@ -131,11 +131,8 @@
       (string-match "\\([^T]+T[^+-]+[+-]\\)\\([0-9]+\\):\\([0-9]+\\)" date)
       (let* ((prefix (match-string 1 date))
              (hours (match-string 2 date))
-             (minutes (match-string 3 date))
-             (minutes-from-hours (+
-                                  (* 60  (string-to-number hours))
-                                  (string-to-number minutes))))
-        (concat prefix (number-to-string minutes-from-hours))))
+             (minutes (match-string 3 date)))
+        (concat prefix hours minutes)))
     
     (defun google-calendar/decode (date)
       (when (and (stringp date) (not (string= date "")))
